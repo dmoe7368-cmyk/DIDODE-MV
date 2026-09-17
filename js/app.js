@@ -4,7 +4,7 @@ import { M3UParser } from "./m3u-parser.js";
 
 /**
  * CineStream Main Controller
- * Fully integrated with Vertical Scroll Grid for M3U Channels.
+ * Enhanced: Resilient Stream Gateway, Automatic Stream Recovery, Vertical Scroll Grid.
  */
 class CineStreamController {
   constructor() {
@@ -81,7 +81,7 @@ class CineStreamController {
       toast: document.getElementById("appToast")
     };
 
-    // M3U Section ကို Vertical Grid သို့ အဆင့်မြှင့်တင်ခြင်း
+    // Configure Vertical Scroll Grid Architecture
     if (this.dom.rowM3uSection) {
       this.dom.rowM3uSection.className = "m3u-channels-section";
       if (this.dom.scrollerM3U) {
@@ -187,21 +187,21 @@ class CineStreamController {
   }
 
   getSafePoster(title, isLive = false) {
-    const clean = encodeURIComponent((title || "Stream").slice(0, 16));
+    const clean = encodeURIComponent((title || "Stream").substring(0, 16));
     const accent = isLive ? "%23dc2626" : "%237042f4";
     return `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="%231a1d2d"/><stop offset="100%" stop-color="%23090a10"/></linearGradient></defs><rect width="100%" height="100%" fill="url(%23g)"/><circle cx="150" cy="85" r="32" fill="${accent}" opacity="0.85"/><polygon points="143,72 163,85 143,98" fill="%23ffffff"/><text x="50%" y="145" font-family="sans-serif" font-size="13" font-weight="bold" fill="%239aa0b8" text-anchor="middle">${clean}</text></svg>`;
   }
 
-  /* ================= M3U Engine (Vertical Grid & Categorization) ================= */
+  /* ================= M3U Processing Engine ================= */
   async handleM3uDirectPaste() {
     const text = this.dom.txtM3uPaste.value.trim();
     if (!text) {
-      this.showToast("ကျေးဇူးပြု၍ .m3u Link သို့မဟုတ် Text ကို ထည့်ပါ");
+      this.showToast("ကျေးဇူးပြု၍ .m3u Link သို့မဟုတ် File Content ကို ထည့်ပါ");
       return;
     }
 
     this.dom.mediaActionSheet.classList.remove("active");
-    this.showToast("Processing M3U Content...");
+    this.showToast("Processing M3U playlist...");
 
     if ((text.startsWith("http://") || text.startsWith("https://")) && !text.includes("\n")) {
       try {
@@ -210,12 +210,12 @@ class CineStreamController {
         const fetchedText = await res.text();
         const channels = M3UParser.parse(fetchedText);
 
-        if (channels.length === 0) throw new Error("No channels found");
+        if (channels.length === 0) throw new Error("Empty playlist");
 
         await dbManager.saveChannels(channels);
         await this.loadSavedM3UChannels();
         this.dom.txtM3uPaste.value = "";
-        this.showToast(`Imported ${channels.length} Channels!`);
+        this.showToast(`Imported ${channels.length} Valid Streams!`);
         return;
       } catch (err) {
         const single = [{
@@ -230,22 +230,21 @@ class CineStreamController {
         await dbManager.saveChannels(single);
         await this.loadSavedM3UChannels();
         this.dom.txtM3uPaste.value = "";
-        this.showToast("Loaded 1 Stream!");
+        this.showToast("Loaded 1 Stream Channel!");
         return;
       }
     }
 
-    try {
-      const channels = M3UParser.parse(text);
-      if (channels.length === 0) throw new Error("No channels found");
-
-      await dbManager.saveChannels(channels);
-      await this.loadSavedM3UChannels();
-      this.dom.txtM3uPaste.value = "";
-      this.showToast(`Saved ${channels.length} Channels!`);
-    } catch (err) {
-      this.showToast("M3U format parse error");
+    const channels = M3UParser.parse(text);
+    if (channels.length === 0) {
+      this.showToast("No direct streams found. Removed unplayable web links.");
+      return;
     }
+
+    await dbManager.saveChannels(channels);
+    await this.loadSavedM3UChannels();
+    this.dom.txtM3uPaste.value = "";
+    this.showToast(`Saved ${channels.length} Channels!`);
   }
 
   async handleM3uFile(e) {
@@ -253,22 +252,27 @@ class CineStreamController {
     if (!file) return;
 
     this.dom.mediaActionSheet.classList.remove("active");
-    this.showToast("Parsing M3U File...");
+    this.showToast("Reading M3U playlist...");
 
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
-        const channels = M3UParser.parse(event.target.result);
-        if (channels.length === 0) throw new Error("No channels found");
+        const content = event.target.result;
+        const channels = M3UParser.parse(content);
+
+        if (channels.length === 0) {
+          throw new Error("No streamable links");
+        }
 
         await dbManager.saveChannels(channels);
         await this.loadSavedM3UChannels();
-        this.showToast(`Imported ${channels.length} Channels!`);
+        this.showToast(`Parsed ${channels.length} live channels!`);
       } catch (err) {
-        this.showToast("File format error");
+        console.error(err);
+        this.showToast("File format invalid or contained only web links");
       }
     };
-    reader.readAsText(file);
+    reader.readAsText(file, "UTF-8");
     e.target.value = "";
   }
 
@@ -281,9 +285,6 @@ class CineStreamController {
     }
   }
 
-  /**
-   * M3U Channels များကို Category အလိုက် Vertical Scroll Grid ဖြင့် ဖော်ပြပေးခြင်း
-   */
   renderM3UInterface() {
     if (!this.dom.rowM3uSection) return;
 
@@ -295,13 +296,12 @@ class CineStreamController {
     this.dom.rowM3uSection.style.display = "block";
     this.dom.m3uCountBadge.textContent = this.m3uChannels.length;
 
-    // 1. Group / Categories Filter Tabs
-    const rawCategories = this.m3uChannels.map(c => c.category || c.group || "General");
+    const rawCategories = this.m3uChannels.map((c) => c.category || c.group || "General");
     const categories = ["All", ...new Set(rawCategories)];
 
     if (this.dom.m3uCategoryBar) {
       this.dom.m3uCategoryBar.innerHTML = "";
-      categories.forEach(cat => {
+      categories.forEach((cat) => {
         const pill = document.createElement("button");
         pill.className = `pill ${this.selectedM3uCategory.toLowerCase() === cat.toLowerCase() ? "active" : ""}`;
         pill.textContent = cat;
@@ -313,16 +313,15 @@ class CineStreamController {
       });
     }
 
-    // 2. Vertical Grid သို့ Channels များ Render ပြုလုပ်ခြင်း
     this.dom.scrollerM3U.innerHTML = "";
     const filteredChannels = this.selectedM3uCategory === "all"
       ? this.m3uChannels
-      : this.m3uChannels.filter(c => {
-          const itemCat = (c.category || c.group || "General").toLowerCase();
-          return itemCat === this.selectedM3uCategory;
+      : this.m3uChannels.filter((c) => {
+          const cat = (c.category || c.group || "General").toLowerCase();
+          return cat === this.selectedM3uCategory;
         });
 
-    filteredChannels.forEach(ch => {
+    filteredChannels.forEach((ch) => {
       const card = this.createPosterCard({
         id: ch.id,
         title: ch.title,
@@ -346,7 +345,7 @@ class CineStreamController {
       m3uContent += `#EXTINF:-1 tvg-logo="${ch.logo || ''}" group-title="${ch.category || ch.group || 'Live'}",${ch.title}\n${ch.streamUrl}\n`;
     });
 
-    const blob = new Blob([m3uContent], { type: "audio/x-mpegurl" });
+    const blob = new Blob([m3uContent], { type: "audio/x-mpegurl;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -356,19 +355,19 @@ class CineStreamController {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    this.showToast(".m3u file saved to download!");
+    this.showToast(".m3u backup saved successfully!");
   }
 
   async clearM3UChannels() {
     if (this.m3uChannels.length === 0) return;
-    const confirmClean = confirm("Channel အားလုံးကို Clean လုပ်တော့မလား? မလုပ်ခင် 'Save .m3u' ဖြင့် သိမ်းထားနိုင်ပါသည်။");
+    const confirmClean = confirm("Channel အားလုံးကို ဖျက်မည်လား? 'Save .m3u' ဖြင့် အရင် Backup ယူထားနိုင်ပါသည်။");
     if (!confirmClean) return;
 
     await dbManager.clearChannels();
     this.m3uChannels = [];
     this.selectedM3uCategory = "all";
     this.renderM3UInterface();
-    this.showToast("Cleaned all M3U channels!");
+    this.showToast("All M3U channels cleared!");
   }
 
   /* ================= Local Device Video Storage ================= */
@@ -420,7 +419,7 @@ class CineStreamController {
       return;
     }
     this.dom.rowLocalSection.style.display = "block";
-    this.localMovies.forEach((m) => this.dom.scrollerLocal.appendChild(this.createPosterCard(m)));
+    this.localMovies.forEach((m) => this.dom.scrollerLocal.appendChild(this.createMovieCard(m)));
   }
 
   /* ================= Google Drive API v3 ================= */
@@ -485,7 +484,7 @@ class CineStreamController {
 
   renderDriveRow() {
     this.dom.scrollerDrive.innerHTML = "";
-    this.driveMovies.forEach((m) => this.dom.scrollerDrive.appendChild(this.createPosterCard(m)));
+    this.driveMovies.forEach((m) => this.dom.scrollerDrive.appendChild(this.createMovieCard(m)));
   }
 
   renderHeroBanner() {
@@ -581,7 +580,7 @@ class CineStreamController {
     }
   }
 
-  /* ================= Playback Controller ================= */
+  /* ================= Playback Controller with Auto-Fallback ================= */
   openDetailsScreen(item, autoPlay = false) {
     this.activeMedia = item;
     const v = this.dom.mainVideo;
@@ -625,17 +624,39 @@ class CineStreamController {
       this.hlsInstance = null;
     }
 
+    // Determine final stream link (Through CORS Proxy for external m3u8 streams)
     let finalUrl = url;
     if (PROXY_CONFIG.USE_PROXY && url.startsWith("http") && !url.includes("googleapis.com")) {
       finalUrl = `${PROXY_CONFIG.CORS_PROXY}${encodeURIComponent(url)}`;
     }
 
     if (url.includes(".m3u8") && Hls.isSupported()) {
-      this.hlsInstance = new Hls({ enableWorker: true });
+      this.hlsInstance = new Hls({
+        enableWorker: true,
+        manifestLoadingTimeOut: 10000
+      });
       this.hlsInstance.loadSource(finalUrl);
       this.hlsInstance.attachMedia(v);
       this.hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
         v.play().catch(() => {});
+      });
+
+      this.hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              // Try direct load once if proxy fails
+              if (finalUrl !== url) {
+                this.hlsInstance.loadSource(url);
+              } else {
+                this.showToast("Channel offline or geo-blocked");
+              }
+              break;
+            default:
+              this.hlsInstance.destroy();
+              break;
+          }
+        }
       });
     } else {
       v.src = finalUrl;
