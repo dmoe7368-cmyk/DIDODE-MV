@@ -1,7 +1,7 @@
 /**
- * Unified Database Layer for Local Videos & M3U Playlists
+ * Unified IndexedDB Database for Device Media and M3U Playlists
  */
-const DB_NAME = "DidodeUnifiedDB";
+const DB_NAME = "DidodeUnifiedDB_v3";
 const DB_VERSION = 1;
 const VIDEO_STORE = "uploaded_videos";
 const M3U_STORE = "m3u_channels";
