@@ -1,65 +1,82 @@
 /**
  * Production-Ready M3U Playlist Parser
- * Fixes: Strips unescaped HTML tag leaks in titles and auto-categorizes channels.
+ * Filters out dead/non-stream links (YouTube, Twitch, Dailymotion)
+ * Sanitizes tag fragments and classifies categories (Sports, Movies, News).
  */
 export class M3UParser {
-  static parse(rawText) {
-    const lines = rawText.split(/\r?\n/);
+  static parse(rawContent) {
+    if (!rawContent || typeof rawContent !== "string") {
+      return [];
+    }
+    
+    // 1. Remove Byte Order Mark (BOM) & normalize line breaks
+    let cleanText = rawContent.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const lines = cleanText.split("\n");
     const channels = [];
     let currentChannel = null;
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-      if (!line) continue;
+      if (!line || line === "#EXTM3U") continue;
       
       if (line.startsWith("#EXTINF:")) {
         currentChannel = {
-          id: "m3u-" + Date.now() + "-" + Math.random().toString(36).substr(2, 9),
+          id: "m3u-" + Date.now() + "-" + Math.random().toString(36).substring(2, 9),
           title: "Channel",
           logo: "",
           group: "General",
+          category: "General",
           streamUrl: "",
           isM3U: true
         };
         
-        // 1. Extract Logo
-        const logoMatch = line.match(/tvg-logo="([^"]+)"/i);
+        // Extract Logo
+        const logoMatch = line.match(/tvg-logo=["']([^"']+)["']/i);
         if (logoMatch && logoMatch[1]) {
           currentChannel.logo = logoMatch[1].trim();
         }
         
-        // 2. Extract Group Title
-        const groupMatch = line.match(/group-title="([^"]+)"/i);
+        // Extract Group Title
+        const groupMatch = line.match(/group-title=["']([^"']+)["']/i);
         if (groupMatch && groupMatch[1]) {
-          currentChannel.group = this.cleanText(groupMatch[1]);
+          currentChannel.group = this.sanitize(groupMatch[1]);
         }
         
-        // 3. Extract Raw Title after the comma
-        const commaIdx = line.indexOf(",");
-        if (commaIdx !== -1) {
-          const rawTitle = line.substring(commaIdx + 1).trim();
-          currentChannel.title = this.cleanText(rawTitle);
+        // Extract Title
+        const commaIndex = line.lastIndexOf(",");
+        if (commaIndex !== -1) {
+          const rawTitle = line.substring(commaIndex + 1).trim();
+          currentChannel.title = this.sanitize(rawTitle) || "Live Channel";
         }
         
-        // 4. Auto Categorize (Sports, Movies, News, Entertainment)
         currentChannel.category = this.detectCategory(currentChannel.title, currentChannel.group);
-        
-      } else if (!line.startsWith("#") && (line.startsWith("http://") || line.startsWith("https://"))) {
-        if (currentChannel) {
-          currentChannel.streamUrl = line;
-          channels.push(currentChannel);
-          currentChannel = null;
-        } else {
-          const rawTitle = line.substring(line.lastIndexOf("/") + 1).split("?")[0] || "Live Stream";
-          channels.push({
-            id: "m3u-" + Date.now() + "-" + Math.random().toString(36).substr(2, 9),
-            title: this.cleanText(rawTitle),
-            logo: "",
-            group: "Direct Links",
-            category: "General",
-            streamUrl: line,
-            isM3U: true
-          });
+      } else if (!line.startsWith("#")) {
+        // Stream URL Validation (Only accept streamable direct protocols)
+        if (line.startsWith("http://") || line.startsWith("https://")) {
+          // Reject YouTube, Twitch, Dailymotion web links that cannot be played in HTML5 video
+          const isWebPlatform = /youtube\.com|youtu\.be|twitch\.tv|dailymotion\.com|facebook\.com/i.test(line);
+          
+          if (!isWebPlatform) {
+            if (currentChannel) {
+              currentChannel.streamUrl = line;
+              channels.push(currentChannel);
+              currentChannel = null;
+            } else {
+              const urlPath = line.split("?")[0];
+              const fallbackTitle = urlPath.substring(urlPath.lastIndexOf("/") + 1) || "Direct Stream";
+              channels.push({
+                id: "m3u-" + Date.now() + "-" + Math.random().toString(36).substring(2, 9),
+                title: this.sanitize(fallbackTitle),
+                logo: "",
+                group: "Direct Links",
+                category: "General",
+                streamUrl: line,
+                isM3U: true
+              });
+            }
+          } else {
+            currentChannel = null; // Drop invalid channel link
+          }
         }
       }
     }
@@ -67,35 +84,29 @@ export class M3UParser {
     return channels;
   }
   
-  /**
-   * HTML Tag များ၊ `alt=` စာသားများနှင့် သင်္ကေတ အပိုများကို ဖယ်ရှားပေးသော Sanitizer
-   */
-  static cleanText(str) {
+  static sanitize(str) {
     if (!str) return "";
     return str
-      .replace(/<[^>]*>/g, "") // HTML tags ဖျက်ခြင်း
-      .replace(/alt=["'][^"']*["']/gi, "") // alt="" attributes ဖျက်ခြင်း
-      .replace(/loading=["'][^"']*["']/gi, "") // loading="" attributes ဖျက်ခြင်း
-      .replace(/[\\/"'<>]/g, "") // အပို Special characters ဖျက်ခြင်း
+      .replace(/<[^>]*>/g, "")
+      .replace(/alt=["'][^"']*["']/gi, "")
+      .replace(/loading=["'][^"']*["']/gi, "")
+      .replace(/[\\/"'<>]/g, "")
       .trim();
   }
   
-  /**
-   * အမည်နှင့် Group ကို ကြည့်၍ Category အလိုအလျောက် သတ်မှတ်ပေးခြင်း
-   */
   static detectCategory(title, group) {
-    const text = `${title} ${group}`.toLowerCase();
+    const combined = `${title} ${group}`.toLowerCase();
     
-    if (/sport|football|soccer|bein|espn|arena|sky sport|uefa|fifa|wwe|ufc|nba|cricket|tennis/i.test(text)) {
+    if (/sport|football|soccer|bein|espn|arena|sky sport|uefa|fifa|wwe|ufc|nba|cricket|tennis|racing|idman|cbc sport/i.test(combined)) {
       return "Sports";
     }
-    if (/movie|cinema|film|action|hbo|netflix|box office|thriller|comedy|drama/i.test(text)) {
+    if (/movie|cinema|film|action|hbo|netflix|box office|thriller|comedy|drama|cine/i.test(combined)) {
       return "Movies";
     }
-    if (/news|cnn|bbc|al jazeera|sky news|fox|weather|bloomberg|cnbc/i.test(text)) {
+    if (/news|cnn|bbc|al jazeera|sky news|fox|weather|bloomberg|cnbc|haber|tagesschau/i.test(combined)) {
       return "News";
     }
-    if (/anime|animation|cartoon|kids|disney|nick/i.test(text)) {
+    if (/anime|animation|cartoon|kids|disney|nick|plusplus|kika/i.test(combined)) {
       return "Anime & Kids";
     }
     return group || "General";
