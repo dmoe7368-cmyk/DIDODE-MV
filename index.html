@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0d0e15" />
+  <title>CineStream Hub</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Header -->
+    <header class="top-nav">
+      <div class="brand">
+        <span class="brand-glyph">▶</span>
+        <span class="brand-text">CineStream</span>
+      </div>
+      <div class="nav-right">
+        <button id="btnOpenMenu" class="icon-btn" title="Add Media" tabindex="0">＋</button>
+        <button id="btnHeaderSearch" class="icon-btn" title="Search" tabindex="0">🔍</button>
+        <div class="user-avatar" tabindex="0">
+          <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80" alt="Profile" />
+        </div>
+      </div>
+    </header>
+
+    <!-- Context Floating Modal (Upload / Paste) -->
+    <div id="mediaActionSheet" class="action-sheet-overlay">
+      <div class="action-sheet">
+        <h3 class="sheet-title">Add Stream or Media</h3>
+        
+        <div class="paste-box">
+          <textarea id="txtM3uPaste" placeholder="Paste .m3u Link URL သို့မဟုတ် .m3u Text ကို ဤနေရာတွင် ထည့်ပါ..."></textarea>
+          <button id="btnProcessPaste" class="btn btn-purple btn-block">⚡ Load Pasted M3U</button>
+        </div>
+
+        <div class="sheet-divider"><span>OR UPLOAD FILE</span></div>
+
+        <div class="sheet-file-actions">
+          <label for="m3uFileInput" class="sheet-btn">
+            <span>📺 Upload .M3U / .M3U8 File</span>
+            <input type="file" id="m3uFileInput" accept=".m3u,.m3u8,text/plain" hidden />
+          </label>
+          <label for="videoUploadInput" class="sheet-btn">
+            <span>📁 Upload Local Video File</span>
+            <input type="file" id="videoUploadInput" accept="video/mp4,video/webm,video/mkv" hidden />
+          </label>
+        </div>
+
+        <button id="btnCloseSheet" class="sheet-btn sheet-btn-cancel">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Main Screens -->
+    <main class="content-viewport">
+      <!-- 1. HOME VIEW -->
+      <section id="viewHome" class="screen-view active">
+        <!-- Hero Featured Card -->
+        <div class="hero-showcase" id="heroShowcase">
+          <img id="heroBackdrop" src="" alt="Hero Backdrop" />
+          <div class="hero-scrim"></div>
+          <div class="hero-details">
+            <span class="sub-badge" id="heroBadge">FEATURED SHOW</span>
+            <h1 class="hero-title" id="heroTitle">Loading Featured...</h1>
+            <div class="hero-buttons">
+              <button id="btnHeroWatch" class="btn btn-purple">▶ Watch Now</button>
+              <button id="btnHeroInfo" class="btn btn-glass">More Info</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Filter Pills Bar -->
+        <div class="pill-bar">
+          <button class="pill active" data-filter="all">All</button>
+          <button class="pill" data-filter="live">Live IPTV</button>
+          <button class="pill" data-filter="anime">Anime</button>
+          <button class="pill" data-filter="movies">Movies</button>
+          <button class="pill" data-filter="local">Device</button>
+        </div>
+
+        <!-- Live TV .M3U Channels -->
+        <div class="media-row" id="rowM3uSection" style="display: none;">
+          <div class="row-header">
+            <div class="header-group">
+              <h2 class="row-title">Live TV Channels (.M3U)</h2>
+              <span id="m3uCountBadge" class="count-tag">0</span>
+            </div>
+            <div class="row-actions">
+              <button id="btnExportM3U" class="btn-link" title="Download backup">Save .m3u</button>
+              <button id="btnClearM3U" class="btn-link text-danger">Clean All</button>
+            </div>
+          </div>
+          <div class="scroller-x" id="scrollerM3U"></div>
+        </div>
+
+        <!-- Continue Watching Row -->
+        <div class="media-row" id="rowHistorySection" style="display: none;">
+          <div class="row-header">
+            <h2 class="row-title">Continue Watching</h2>
+            <button id="btnClearHistory" class="btn-link">Clear</button>
+          </div>
+          <div class="scroller-x" id="scrollerHistory"></div>
+        </div>
+
+        <!-- Local Device Videos -->
+        <div class="media-row" id="rowLocalSection" style="display: none;">
+          <div class="row-header">
+            <h2 class="row-title">Device Storage (Local)</h2>
+            <button id="btnClearLocal" class="btn-link text-danger">Clean Storage</button>
+          </div>
+          <div class="scroller-x" id="scrollerLocal"></div>
+        </div>
+
+        <!-- Google Drive Streams Row -->
+        <div class="media-row" id="rowDriveSection">
+          <div class="row-header">
+            <h2 class="row-title">Trending Now (Google Drive)</h2>
+            <button id="btnRefreshDrive" class="btn-link">Sync</button>
+          </div>
+          <div class="scroller-x" id="scrollerDrive">
+            <div class="loading-state" id="driveLoading">Loading Media Cloud...</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. DETAILS & PLAYER VIEW -->
+      <section id="viewDetails" class="screen-view details-screen">
+        <button id="btnBackDetails" class="back-floating-btn" aria-label="Back">❮</button>
+        
+        <div class="player-container" id="playerContainer">
+          <video id="mainVideo" preload="metadata" playsinline controls></video>
+          
+          <div class="seek-indicator seek-left" id="seekLeft">-10s</div>
+          <div class="seek-indicator seek-right" id="seekRight">+10s</div>
+        </div>
+
+        <div class="details-body">
+          <div class="details-meta-row">
+            <div>
+              <h1 id="detailsTitle" class="details-title">Title Here</h1>
+              <div class="tags-line">
+                <span class="badge-age" id="detailsBadge">STREAM</span>
+                <span class="genre-text" id="detailsMeta">HLS / MP4 Live Stream</span>
+              </div>
+            </div>
+            <div class="rating-box">
+              <span class="star-icon">★</span>
+              <span class="score-text">5.0</span>
+            </div>
+          </div>
+
+          <div class="details-actions">
+            <button id="btnResumeVideo" class="btn btn-purple btn-flex">▶ Play</button>
+            <button id="btnRotateView" class="btn btn-glass btn-flex">⛶ Rotate</button>
+          </div>
+
+          <p class="details-synopsis" id="detailsSynopsis">
+            Streaming directly using advanced HTML5 Media Source Extensions with adaptive buffer playback.
+          </p>
+
+          <div class="details-tab-nav">
+            <button class="tab-btn active">Source Stream Info</button>
+          </div>
+
+          <div class="episodes-list" id="episodesList"></div>
+        </div>
+      </section>
+
+      <!-- 3. SEARCH & EXPLORE VIEW -->
+      <section id="viewSearch" class="screen-view">
+        <div class="search-header">
+          <div class="search-field-wrap">
+            <span class="search-ico">🔍</span>
+            <input type="search" id="inputSearchQuery" placeholder="Search streams, channels, movies..." />
+          </div>
+        </div>
+
+        <div class="search-results-section">
+          <div class="poster-grid" id="searchGrid"></div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Bottom Nav -->
+    <nav class="bottom-nav">
+      <button class="nav-item active" data-target="viewHome">
+        <span class="nav-icon">⌂</span>
+        <span class="nav-label">Home</span>
+      </button>
+      <button class="nav-item" data-target="viewSearch">
+        <span class="nav-icon">⚲</span>
+        <span class="nav-label">Explore</span>
+      </button>
+    </nav>
+
+    <!-- Global Floating Feedback Toast -->
+    <div id="appToast" class="toast"></div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
