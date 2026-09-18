@@ -4,28 +4,33 @@ import { M3UParser } from "./m3u-parser.js";
 
 /**
  * CineStream Main Controller
- * Enhanced: Dual Audio Routing, Stereo Downmix Matrix, External Audio Track Sync & Audio Guard.
+ * Integrated Features:
+ * 1. Built-in M3U Stream Health Checker & Status Badges (Live, Dead, Checking).
+ * 2. Dedicated Sports Detection & Priority Filter.
+ * 3. Compact Group Dropdown (No infinite column bugs).
+ * 4. In-Player Quick Channel Switcher (⏮ Prev / Next ⏭ / ☰ Channels Drawer).
+ * 5. Clean Stereo Passthrough (No audio distortion/clipping).
+ * 6. Custom Glassmorphic Modal Dialog (No browser confirm popups with domain headers).
  */
 class CineStreamController {
   constructor() {
     this.driveMovies = [];
     this.localMovies = [];
     this.m3uChannels = [];
+    this.currentIptvGroupList = [];
     this.activeCategory = "drive";
     this.selectedM3uCategory = "all";
+    this.currentPlayingChannelIndex = -1;
+    this.isCheckingStreams = false;
+    this.showOnlyLive = false;
+    this.abortCheckerController = null;
+
     this.history = this.loadHistory();
     this.activeMedia = null;
     this.hlsInstance = null;
     this.tapTimer = 0;
     this.isLandscape = false;
-
-    // Web Audio Engine Routing Pipeline
-    this.audioCtx = null;
-    this.mediaElementSource = null;
-    this.gainNode = null;
-    this.splitterNode = null;
-    this.mergerNode = null;
-    this.externalAudio = null;
+    this.pendingConfirmCallback = null;
 
     this.cacheDom();
     this.initEvents();
@@ -34,22 +39,44 @@ class CineStreamController {
 
   cacheDom() {
     this.dom = {
+      // Views & Navigation
       viewHome: document.getElementById("viewHome"),
       viewDetails: document.getElementById("viewDetails"),
       viewSearch: document.getElementById("viewSearch"),
       navItems: document.querySelectorAll(".bottom-nav .nav-item"),
       btnHeaderSearch: document.getElementById("btnHeaderSearch"),
 
+      // Main Sections
       sectionDrive: document.getElementById("sectionDrive"),
       sectionIptv: document.getElementById("sectionIptv"),
       sectionDevice: document.getElementById("sectionDevice"),
       rowHistorySection: document.getElementById("rowHistorySection"),
       catTabs: document.querySelectorAll(".cat-tab"),
 
+      // Badges
       driveCountBadge: document.getElementById("driveCountBadge"),
       m3uCountBadge: document.getElementById("m3uCountBadge"),
       localCountBadge: document.getElementById("localCountBadge"),
 
+      // IPTV Filter Controls
+      selectIptvGroup: document.getElementById("selectIptvGroup"),
+      inputIptvSearch: document.getElementById("inputIptvSearch"),
+      btnCheckStreams: document.getElementById("btnCheckStreams"),
+      btnFilterLiveOnly: document.getElementById("btnFilterLiveOnly"),
+      checkerProgressWrap: document.getElementById("checkerProgressWrap"),
+      checkerProgressBar: document.getElementById("checkerProgressBar"),
+
+      // In-Player Controls & Switcher Drawer
+      iptvPlayerControls: document.getElementById("iptvPlayerControls"),
+      btnPrevChannel: document.getElementById("btnPrevChannel"),
+      btnNextChannel: document.getElementById("btnNextChannel"),
+      btnToggleChannelDrawer: document.getElementById("btnToggleChannelDrawer"),
+      channelDrawer: document.getElementById("channelDrawer"),
+      btnCloseDrawer: document.getElementById("btnCloseDrawer"),
+      drawerGroupTitle: document.getElementById("drawerGroupTitle"),
+      drawerChannelList: document.getElementById("drawerChannelList"),
+
+      // Upload Controls
       btnOpenUploadModal: document.getElementById("btnOpenUploadModal"),
       mediaActionSheet: document.getElementById("mediaActionSheet"),
       btnCloseSheet: document.getElementById("btnCloseSheet"),
@@ -59,25 +86,35 @@ class CineStreamController {
       videoUploadInput: document.getElementById("videoUploadInput"),
       directVideoUploadInput: document.getElementById("directVideoUploadInput"),
 
+      // Hero Showcase
       heroBackdrop: document.getElementById("heroBackdrop"),
       heroTitle: document.getElementById("heroTitle"),
       heroBadge: document.getElementById("heroBadge"),
       btnHeroWatch: document.getElementById("btnHeroWatch"),
       btnHeroInfo: document.getElementById("btnHeroInfo"),
 
+      // Scrollers & Grids
       scrollerDrive: document.getElementById("scrollerDrive"),
       scrollerM3U: document.getElementById("scrollerM3U"),
       scrollerLocal: document.getElementById("scrollerLocal"),
       scrollerHistory: document.getElementById("scrollerHistory"),
-      m3uCategoryBar: document.getElementById("m3uCategoryBar"),
       driveLoading: document.getElementById("driveLoading"),
 
+      // Buttons
       btnRefreshDrive: document.getElementById("btnRefreshDrive"),
       btnExportM3U: document.getElementById("btnExportM3U"),
       btnClearM3U: document.getElementById("btnClearM3U"),
       btnClearLocal: document.getElementById("btnClearLocal"),
       btnClearHistory: document.getElementById("btnClearHistory"),
 
+      // Custom Confirmation Modal
+      customConfirmModal: document.getElementById("customConfirmModal"),
+      dialogTitle: document.getElementById("dialogTitle"),
+      dialogMessage: document.getElementById("dialogMessage"),
+      btnCancelDialog: document.getElementById("btnCancelDialog"),
+      btnConfirmDialog: document.getElementById("btnConfirmDialog"),
+
+      // Player & Details Modal
       btnBackDetails: document.getElementById("btnBackDetails"),
       playerContainer: document.getElementById("playerContainer"),
       mainVideo: document.getElementById("mainVideo"),
@@ -91,9 +128,6 @@ class CineStreamController {
       seekLeft: document.getElementById("seekLeft"),
       seekRight: document.getElementById("seekRight"),
 
-      audioCodecAlert: document.getElementById("audioCodecAlert"),
-      btnFixAudioEngine: document.getElementById("btnFixAudioEngine"),
-
       inputSearchQuery: document.getElementById("inputSearchQuery"),
       searchGrid: document.getElementById("searchGrid"),
       toast: document.getElementById("appToast")
@@ -101,6 +135,7 @@ class CineStreamController {
   }
 
   initEvents() {
+    // Bottom Tab Router
     this.dom.navItems.forEach((btn) => {
       btn.addEventListener("click", () => this.switchTab(btn.dataset.target, btn));
     });
@@ -112,6 +147,7 @@ class CineStreamController {
       });
     }
 
+    // Main Category Selector
     this.dom.catTabs.forEach((tab) => {
       tab.addEventListener("click", () => {
         this.dom.catTabs.forEach((t) => t.classList.remove("active"));
@@ -120,6 +156,52 @@ class CineStreamController {
       });
     });
 
+    // IPTV Group Dropdown & Search Filter
+    if (this.dom.selectIptvGroup) {
+      this.dom.selectIptvGroup.addEventListener("change", (e) => {
+        this.selectedM3uCategory = e.target.value.toLowerCase();
+        this.renderM3UGrid();
+      });
+    }
+    if (this.dom.inputIptvSearch) {
+      this.dom.inputIptvSearch.addEventListener("input", () => this.renderM3UGrid());
+    }
+
+    // Stream Health Checker Listeners
+    if (this.dom.btnCheckStreams) {
+      this.dom.btnCheckStreams.addEventListener("click", () => this.startHealthChecking());
+    }
+    if (this.dom.btnFilterLiveOnly) {
+      this.dom.btnFilterLiveOnly.addEventListener("click", () => this.toggleLiveOnlyFilter());
+    }
+
+    // In-Player Channel Switcher
+    if (this.dom.btnPrevChannel) {
+      this.dom.btnPrevChannel.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.switchChannelDelta(-1);
+      });
+    }
+    if (this.dom.btnNextChannel) {
+      this.dom.btnNextChannel.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.switchChannelDelta(1);
+      });
+    }
+    if (this.dom.btnToggleChannelDrawer) {
+      this.dom.btnToggleChannelDrawer.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.toggleChannelDrawer();
+      });
+    }
+    if (this.dom.btnCloseDrawer) {
+      this.dom.btnCloseDrawer.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.dom.channelDrawer.classList.remove("active");
+      });
+    }
+
+    // Upload Modal Sheet Trigger
     if (this.dom.btnOpenUploadModal) {
       this.dom.btnOpenUploadModal.addEventListener("click", () => {
         this.dom.mediaActionSheet.classList.add("active");
@@ -131,6 +213,7 @@ class CineStreamController {
       });
     }
 
+    // Video Upload Inputs
     [this.dom.videoUploadInput, this.dom.directVideoUploadInput].forEach((input) => {
       if (input) {
         input.accept = "video/*,.mkv,.mp4,.webm,.avi,.mov";
@@ -138,10 +221,40 @@ class CineStreamController {
       }
     });
 
+    // Custom Clean Dialogs
     if (this.dom.btnClearLocal) {
-      this.dom.btnClearLocal.addEventListener("click", () => this.clearLocalStorage());
+      this.dom.btnClearLocal.addEventListener("click", () => {
+        this.openConfirmDialog(
+          "Clean Storage",
+          "Device ပေါ်တွင် သိမ်းဆည်းထားသော ဒေသတွင်း ရုပ်ရှင်အားလုံးကို ဖျက်မည်လား?",
+          () => this.clearLocalStorage()
+        );
+      });
     }
 
+    if (this.dom.btnClearM3U) {
+      this.dom.btnClearM3U.addEventListener("click", () => {
+        this.openConfirmDialog(
+          "Clean IPTV Channels",
+          "IPTV Channel စာရင်းအားလုံးကို အပြီးတိုင် ဖျက်မည်လား? မဖျက်ခင် 'Save .m3u' ဖြင့် backup ယူထားနိုင်ပါသည်။",
+          () => this.clearM3UChannels()
+        );
+      });
+    }
+
+    if (this.dom.btnCancelDialog) {
+      this.dom.btnCancelDialog.addEventListener("click", () => this.closeConfirmDialog());
+    }
+    if (this.dom.btnConfirmDialog) {
+      this.dom.btnConfirmDialog.addEventListener("click", () => {
+        if (typeof this.pendingConfirmCallback === "function") {
+          this.pendingConfirmCallback();
+        }
+        this.closeConfirmDialog();
+      });
+    }
+
+    // M3U Actions
     if (this.dom.btnProcessPaste) {
       this.dom.btnProcessPaste.addEventListener("click", () => this.handleM3uDirectPaste());
     }
@@ -151,10 +264,8 @@ class CineStreamController {
     if (this.dom.btnExportM3U) {
       this.dom.btnExportM3U.addEventListener("click", () => this.exportM3UBackup());
     }
-    if (this.dom.btnClearM3U) {
-      this.dom.btnClearM3U.addEventListener("click", () => this.clearM3UChannels());
-    }
 
+    // Drive Sync & History Clear
     if (this.dom.btnRefreshDrive) {
       this.dom.btnRefreshDrive.addEventListener("click", () => this.fetchDriveCatalog());
     }
@@ -162,6 +273,7 @@ class CineStreamController {
       this.dom.btnClearHistory.addEventListener("click", () => this.clearHistory());
     }
 
+    // Player Modal Actions
     if (this.dom.btnBackDetails) {
       this.dom.btnBackDetails.addEventListener("click", () => this.closeDetailsScreen());
     }
@@ -178,23 +290,16 @@ class CineStreamController {
       this.dom.mainVideo.addEventListener("timeupdate", () => this.onTimeUpdate());
     }
 
-    // Audio Boost Listener
-    if (this.dom.btnFixAudioEngine) {
-      this.dom.btnFixAudioEngine.addEventListener("click", () => this.forceBoostAudio());
-    }
-
     if (this.dom.inputSearchQuery) {
       this.dom.inputSearchQuery.addEventListener("input", (e) => this.renderSearchGrid(e.target.value));
     }
-
-    document.addEventListener("click", () => this.resumeAudioContext(), { once: true });
   }
 
   async bootApp() {
     try {
       await dbManager.init();
     } catch (e) {
-      console.warn("DB init:", e);
+      console.warn("Database Init Warning:", e);
     }
     await this.loadLocalVideos();
     await this.loadSavedM3UChannels();
@@ -207,7 +312,19 @@ class CineStreamController {
     if (!this.dom.toast) return;
     this.dom.toast.textContent = text;
     this.dom.toast.classList.add("show");
-    setTimeout(() => this.dom.toast.classList.remove("show"), 3200);
+    setTimeout(() => this.dom.toast.classList.remove("show"), 3000);
+  }
+
+  openConfirmDialog(title, message, onConfirm) {
+    this.dom.dialogTitle.textContent = title;
+    this.dom.dialogMessage.textContent = message;
+    this.pendingConfirmCallback = onConfirm;
+    this.dom.customConfirmModal.classList.add("active");
+  }
+
+  closeConfirmDialog() {
+    this.dom.customConfirmModal.classList.remove("active");
+    this.pendingConfirmCallback = null;
   }
 
   loadHistory() {
@@ -250,7 +367,7 @@ class CineStreamController {
     if (catKey === "device") {
       this.renderLocalRow();
     } else if (catKey === "iptv") {
-      this.renderM3UInterface();
+      this.renderM3UGrid();
     } else {
       this.renderDriveRow();
     }
@@ -259,74 +376,105 @@ class CineStreamController {
   getSafePoster(title, isLive = false) {
     const cleanTitle = (title || "Media").substring(0, 16).replace(/[<>&"']/g, "");
     const color = isLive ? "#dc2626" : "#7042f4";
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='300' height='200' viewBox='0 0 300 200'><rect width='100%' height='100%' fill='#171a29'/><circle cx='150' cy='85' r='32' fill='${color}' opacity='0.85'/><polygon points='143,72 163,85 143,98' fill='#ffffff'/><text x='50%' y='145' font-family='sans-serif' font-size='13' font-weight='bold' fill='#9aa0b8' text-anchor='middle'>${cleanTitle}</text></svg>`;
-    return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+    const svgString = `<svg xmlns='http://www.w3.org/2000/svg' width='300' height='200' viewBox='0 0 300 200'><rect width='100%' height='100%' fill='#171a29'/><circle cx='150' cy='85' r='32' fill='${color}' opacity='0.85'/><polygon points='143,72 163,85 143,98' fill='#ffffff'/><text x='50%' y='145' font-family='sans-serif' font-size='13' font-weight='bold' fill='#9aa0b8' text-anchor='middle'>${cleanTitle}</text></svg>`;
+    return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgString)))}`;
   }
 
-  /* ================= Web Audio Decoding & Routing Engine ================= */
-  setupAudioPipeline() {
+  /* ================= Stream Health Checker Engine ================= */
+  async checkStreamHealth(url, signal) {
+    if (!url || /youtube\.com|twitch\.tv|dailymotion\.com/i.test(url)) return "dead";
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500); // 4.5s probe timeout
+
+    if (signal) {
+      signal.addEventListener("abort", () => controller.abort());
+    }
+
     try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!this.audioCtx && AudioCtx) {
-        this.audioCtx = new AudioCtx({ latencyHint: "playback" });
+      const probeUrl = `${PROXY_CONFIG.CORS_PROXY}${encodeURIComponent(url)}`;
+      const res = await fetch(probeUrl, {
+        method: "GET",
+        signal: controller.signal,
+        headers: { "Range": "bytes=0-512" } // Fetch header chunk only
+      });
+      clearTimeout(timer);
+      return res.ok ? "live" : "dead";
+    } catch {
+      clearTimeout(timer);
+      return "dead";
+    }
+  }
+
+  async startHealthChecking() {
+    if (this.isCheckingStreams || this.currentIptvGroupList.length === 0) {
+      this.showToast("စစ်ဆေးရန် Channel စာရင်း မရှိပါ");
+      return;
+    }
+
+    this.isCheckingStreams = true;
+    this.abortCheckerController = new AbortController();
+    this.dom.checkerProgressWrap.style.display = "block";
+    this.dom.checkerProgressBar.style.width = "0%";
+    this.dom.btnCheckStreams.textContent = "⏹ Stop Checking";
+    this.showToast("Channels စစ်ဆေးနေပါသည်...");
+
+    const targetList = [...this.currentIptvGroupList];
+    let completed = 0;
+    const total = targetList.length;
+
+    const concurrency = 4; // Check 4 channels concurrently
+    const queue = [...targetList];
+
+    const worker = async () => {
+      while (queue.length > 0) {
+        if (this.abortCheckerController.signal.aborted) break;
+        const channel = queue.shift();
+        channel.health = "checking";
+        this.updateCardBadge(channel.id, "checking");
+
+        const status = await this.checkStreamHealth(channel.streamUrl, this.abortCheckerController.signal);
+        channel.health = status;
+        this.updateCardBadge(channel.id, status);
+
+        completed++;
+        const pct = Math.round((completed / total) * 100);
+        this.dom.checkerProgressBar.style.width = `${pct}%`;
       }
+    };
 
-      if (this.audioCtx && !this.mediaElementSource) {
-        this.mediaElementSource = this.audioCtx.createMediaElementSource(this.dom.mainVideo);
+    const workers = [];
+    for (let i = 0; i < concurrency; i++) {
+      workers.push(worker());
+    }
 
-        // 6-Channel to Stereo Downmixer Matrix Node
-        this.splitterNode = this.audioCtx.createChannelSplitter(6);
-        this.mergerNode = this.audioCtx.createChannelMerger(2);
-        this.gainNode = this.audioCtx.createGain();
-        this.gainNode.gain.value = 2.0; // 200% Gain boost
+    await Promise.all(workers);
 
-        // Connect media source to splitter
-        this.mediaElementSource.connect(this.splitterNode);
+    this.isCheckingStreams = false;
+    this.dom.btnCheckStreams.textContent = "⚡ Check Health";
+    this.dom.checkerProgressWrap.style.display = "none";
+    this.showToast("စစ်ဆေးမှု ပြီးဆုံးပါပြီ!");
+  }
 
-        // Map Left, Center, Right, Sub to Stereo Outputs
-        // Front Left -> Stereo Left
-        this.splitterNode.connect(this.mergerNode, 0, 0);
-        // Front Right -> Stereo Right
-        this.splitterNode.connect(this.mergerNode, 1, 1);
-        // Center (Dialogues) -> Both Left & Right
-        this.splitterNode.connect(this.mergerNode, 2, 0);
-        this.splitterNode.connect(this.mergerNode, 2, 1);
-
-        // Connect Merger -> Gain -> Speakers
-        this.mergerNode.connect(this.gainNode);
-        this.gainNode.connect(this.audioCtx.destination);
+  updateCardBadge(channelId, status) {
+    const card = document.querySelector(`[data-card-id="${channelId}"]`);
+    if (card) {
+      let badge = card.querySelector(".health-badge");
+      if (!badge) {
+        badge = document.createElement("span");
+        badge.className = "health-badge";
+        card.querySelector(".poster-thumb-wrap").appendChild(badge);
       }
-    } catch (e) {
-      console.warn("Direct Stereo Passthrough:", e);
+      badge.className = `health-badge ${status}`;
+      badge.textContent = status === "live" ? "LIVE" : status === "dead" ? "DEAD" : "...";
     }
   }
 
-  resumeAudioContext() {
-    if (this.audioCtx && this.audioCtx.state === "suspended") {
-      this.audioCtx.resume();
-    }
-  }
-
-  forceBoostAudio() {
-    this.resumeAudioContext();
-    const v = this.dom.mainVideo;
-    v.muted = false;
-    v.volume = 1.0;
-
-    if (this.gainNode) {
-      this.gainNode.gain.value = 3.5; // High boost for center channel
-      this.showToast("Center Channel & Dialogue Boosted to 350%");
-    } else {
-      this.setupAudioPipeline();
-      this.showToast("Audio Downmix Engine Activated");
-    }
-  }
-
-  detectAudioIncompatibility(fileName) {
-    const isEAC3orDolby = /eac3|ac3|ddp|dts|truehd|atmos|5\.1|7\.1|2160p|hevc/i.test(fileName);
-    if (this.dom.audioCodecAlert) {
-      this.dom.audioCodecAlert.style.display = isEAC3orDolby ? "flex" : "none";
-    }
+  toggleLiveOnlyFilter() {
+    this.showOnlyLive = !this.showOnlyLive;
+    this.dom.btnFilterLiveOnly.textContent = this.showOnlyLive ? "🟢 All Channels" : "🟢 Live Only";
+    this.dom.btnFilterLiveOnly.classList.toggle("text-primary", this.showOnlyLive);
+    this.renderM3UGrid();
   }
 
   /* ================= 1. Device Storage Operations ================= */
@@ -371,8 +519,8 @@ class CineStreamController {
         this.showToast("Video stored permanently!");
       }
     } catch (err) {
-      console.warn("Storage quota fallback (in-memory mode):", err);
-      this.showToast("Video loaded for current session!");
+      console.warn("Storage quota warning (in-memory mode):", err);
+      this.showToast("Video ready for current session!");
     }
 
     e.target.value = "";
@@ -431,20 +579,12 @@ class CineStreamController {
   }
 
   async clearLocalStorage() {
-    if (this.localMovies.length === 0) {
-      this.showToast("No device movies to clear");
-      return;
-    }
-
-    const confirmClean = confirm("Device ပေါ်တွင် သိမ်းထားသော ရုပ်ရှင်အားလုံးကို ဖျက်မည်လား?");
-    if (!confirmClean) return;
-
     try {
       if (dbManager && typeof dbManager.clearVideos === "function") {
         await dbManager.clearVideos();
       }
     } catch (e) {
-      console.warn("DB clear error:", e);
+      console.warn("DB clear notice:", e);
     }
 
     this.localMovies.forEach((m) => {
@@ -461,7 +601,7 @@ class CineStreamController {
     this.showToast("Device storage cleaned successfully!");
   }
 
-  /* ================= 2. Live IPTV Operations ================= */
+  /* ================= 2. Live IPTV Engine ================= */
   async handleM3uDirectPaste() {
     const text = this.dom.txtM3uPaste.value.trim();
     if (!text) {
@@ -489,10 +629,12 @@ class CineStreamController {
       } catch (err) {
         const single = [{
           id: "m3u-" + Date.now(),
-          title: "Direct Pasted Stream",
+          title: "Direct Stream",
           logo: "",
           group: "Pasted Link",
           category: "General",
+          isSports: false,
+          health: "pending",
           streamUrl: text,
           isM3U: true
         }];
@@ -546,13 +688,48 @@ class CineStreamController {
       if (this.dom.m3uCountBadge) {
         this.dom.m3uCountBadge.textContent = this.m3uChannels.length;
       }
-      this.renderM3UInterface();
+      this.populateIptvGroups();
+      this.renderM3UGrid();
     } catch (err) {
       console.error(err);
     }
   }
 
-  renderM3UInterface() {
+  populateIptvGroups() {
+    if (!this.dom.selectIptvGroup) return;
+
+    const rawGroups = this.m3uChannels.map((c) => c.group || c.category || "General");
+    const uniqueGroups = Array.from(new Set(rawGroups.map((g) => g.trim())));
+
+    this.dom.selectIptvGroup.innerHTML = "";
+
+    const optAll = document.createElement("option");
+    optAll.value = "all";
+    optAll.textContent = "🌐 All Categories / Countries";
+    this.dom.selectIptvGroup.appendChild(optAll);
+
+    const sportsCount = this.m3uChannels.filter((c) => c.isSports || (c.category && c.category.toLowerCase() === "sports") || (c.group && c.group.toLowerCase().includes("sport"))).length;
+    if (sportsCount > 0) {
+      const optSports = document.createElement("option");
+      optSports.value = "sports";
+      optSports.textContent = `⚽ Sports Channels (${sportsCount})`;
+      if (this.selectedM3uCategory === "sports") optSports.selected = true;
+      this.dom.selectIptvGroup.appendChild(optSports);
+    }
+
+    uniqueGroups
+      .filter((g) => g.toLowerCase() !== "sports")
+      .sort((a, b) => a.localeCompare(b))
+      .forEach((grp) => {
+        const opt = document.createElement("option");
+        opt.value = grp;
+        opt.textContent = `📁 ${grp}`;
+        if (grp.toLowerCase() === this.selectedM3uCategory) opt.selected = true;
+        this.dom.selectIptvGroup.appendChild(opt);
+      });
+  }
+
+  renderM3UGrid() {
     if (!this.dom.scrollerM3U) return;
     this.dom.scrollerM3U.innerHTML = "";
 
@@ -568,41 +745,100 @@ class CineStreamController {
       return;
     }
 
-    const rawCategories = this.m3uChannels.map((c) => c.category || c.group || "General");
-    const categories = ["All", ...new Set(rawCategories)];
+    const searchTerm = (this.dom.inputIptvSearch ? this.dom.inputIptvSearch.value : "").toLowerCase().trim();
 
-    if (this.dom.m3uCategoryBar) {
-      this.dom.m3uCategoryBar.innerHTML = "";
-      categories.forEach((cat) => {
-        const pill = document.createElement("button");
-        pill.className = `cat-tab ${this.selectedM3uCategory.toLowerCase() === cat.toLowerCase() ? "active" : ""}`;
-        pill.style.padding = "6px 16px";
-        pill.style.fontSize = "0.78rem";
-        pill.textContent = cat;
-        pill.onclick = () => {
-          this.selectedM3uCategory = cat.toLowerCase();
-          this.renderM3UInterface();
-        };
-        this.dom.m3uCategoryBar.appendChild(pill);
-      });
+    this.currentIptvGroupList = this.m3uChannels.filter((c) => {
+      const itemGroup = (c.group || c.category || "General").toLowerCase();
+      const isSportsMatch = this.selectedM3uCategory === "sports" && (c.isSports || itemGroup.includes("sport") || (c.category && c.category.toLowerCase() === "sports"));
+      const isStandardMatch = this.selectedM3uCategory === "all" || itemGroup === this.selectedM3uCategory;
+      const matchGroup = isSportsMatch || isStandardMatch;
+      const matchSearch = !searchTerm || c.title.toLowerCase().includes(searchTerm);
+      const matchLiveOnly = !this.showOnlyLive || c.health === "live";
+
+      return matchGroup && matchSearch && matchLiveOnly;
+    });
+
+    if (this.currentIptvGroupList.length === 0) {
+      this.dom.scrollerM3U.innerHTML = `<div class="empty-box"><p>No channels match the filter (Try 'Check Health' first).</p></div>`;
+      return;
     }
 
-    const filtered = this.selectedM3uCategory === "all"
-      ? this.m3uChannels
-      : this.m3uChannels.filter((c) => (c.category || c.group || "General").toLowerCase() === this.selectedM3uCategory);
-
-    filtered.forEach((ch) => {
-      this.dom.scrollerM3U.appendChild(
-        this.createPosterCard({
-          id: ch.id,
-          title: ch.title,
-          folderName: ch.category || ch.group || "Live TV",
-          posterUrl: ch.logo || this.getSafePoster(ch.title, true),
-          streamUrl: ch.streamUrl,
-          isM3U: true
-        })
-      );
+    this.currentIptvGroupList.forEach((ch, idx) => {
+      const card = this.createPosterCard({
+        id: ch.id,
+        title: ch.title,
+        folderName: ch.isSports ? "⚽ Sports" : (ch.group || ch.category || "Live TV"),
+        posterUrl: ch.logo || this.getSafePoster(ch.title, true),
+        streamUrl: ch.streamUrl,
+        isM3U: true,
+        health: ch.health || "pending",
+        channelIndex: idx
+      });
+      this.dom.scrollerM3U.appendChild(card);
     });
+  }
+
+  /* In-Player Channel Switcher Drawer */
+  toggleChannelDrawer() {
+    const drawer = this.dom.channelDrawer;
+    if (!drawer) return;
+
+    const isActive = drawer.classList.contains("active");
+    if (isActive) {
+      drawer.classList.remove("active");
+    } else {
+      this.renderDrawerChannelList();
+      drawer.classList.add("active");
+    }
+  }
+
+  renderDrawerChannelList() {
+    const list = this.dom.drawerChannelList;
+    if (!list) return;
+    list.innerHTML = "";
+
+    const activeList = this.currentIptvGroupList.length > 0 ? this.currentIptvGroupList : this.m3uChannels;
+    this.dom.drawerGroupTitle.textContent = `Channels (${activeList.length})`;
+
+    activeList.forEach((ch, idx) => {
+      const item = document.createElement("div");
+      const isCurrent = this.activeMedia && this.activeMedia.id === ch.id;
+      item.className = `drawer-channel-item ${isCurrent ? "active" : ""}`;
+
+      item.innerHTML = `
+        <img class="drawer-thumb" src="${ch.logo || this.getSafePoster(ch.title, true)}" onerror="this.src='${this.getSafePoster(ch.title, true)}'" />
+        <span class="drawer-title">${ch.title}</span>
+      `;
+
+      item.onclick = (e) => {
+        e.stopPropagation();
+        this.currentPlayingChannelIndex = idx;
+        this.openDetailsScreen({ ...ch, isM3U: true }, true);
+        this.dom.channelDrawer.classList.remove("active");
+      };
+
+      list.appendChild(item);
+    });
+  }
+
+  switchChannelDelta(delta) {
+    const activeList = this.currentIptvGroupList.length > 0 ? this.currentIptvGroupList : this.m3uChannels;
+    if (activeList.length === 0) return;
+
+    if (this.currentPlayingChannelIndex === -1) {
+      this.currentPlayingChannelIndex = activeList.findIndex((c) => this.activeMedia && c.id === this.activeMedia.id);
+    }
+
+    let nextIndex = this.currentPlayingChannelIndex + delta;
+    if (nextIndex < 0) nextIndex = activeList.length - 1;
+    if (nextIndex >= activeList.length) nextIndex = 0;
+
+    this.currentPlayingChannelIndex = nextIndex;
+    const nextChannel = activeList[nextIndex];
+    if (nextChannel) {
+      this.openDetailsScreen({ ...nextChannel, isM3U: true }, true);
+      this.showToast(`Switched to: ${nextChannel.title}`);
+    }
   }
 
   exportM3UBackup() {
@@ -613,7 +849,7 @@ class CineStreamController {
 
     let m3uContent = "#EXTM3U\n";
     this.m3uChannels.forEach((ch) => {
-      m3uContent += `#EXTINF:-1 tvg-logo="${ch.logo || ''}" group-title="${ch.category || ch.group || 'Live'}",${ch.title}\n${ch.streamUrl}\n`;
+      m3uContent += `#EXTINF:-1 tvg-logo="${ch.logo || ''}" group-title="${ch.group || ch.category || 'Live'}",${ch.title}\n${ch.streamUrl}\n`;
     });
 
     const blob = new Blob([m3uContent], { type: "audio/x-mpegurl;charset=utf-8" });
@@ -629,20 +865,15 @@ class CineStreamController {
   }
 
   async clearM3UChannels() {
-    if (this.m3uChannels.length === 0) {
-      this.showToast("No channels to clear");
-      return;
-    }
-    const confirmClean = confirm("IPTV Channel အားလုံးကို ဖျက်မည်လား?");
-    if (!confirmClean) return;
-
     await dbManager.clearChannels();
     this.m3uChannels = [];
+    this.currentIptvGroupList = [];
     this.selectedM3uCategory = "all";
     if (this.dom.m3uCountBadge) {
       this.dom.m3uCountBadge.textContent = "0";
     }
-    this.renderM3UInterface();
+    this.populateIptvGroups();
+    this.renderM3UGrid();
     this.showToast("All IPTV channels cleared!");
   }
 
@@ -703,7 +934,7 @@ class CineStreamController {
       this.renderHistoryRow();
       this.showToast(`Loaded ${this.driveMovies.length} Drive Movies!`);
     } catch (err) {
-      console.warn("Drive sync error:", err);
+      console.warn("Drive sync note:", err);
     } finally {
       if (this.dom.driveLoading) this.dom.driveLoading.style.display = "none";
     }
@@ -731,14 +962,21 @@ class CineStreamController {
     this.dom.btnHeroInfo.onclick = () => this.openDetailsScreen(featured, false);
   }
 
+  /* ================= Card Element Rendering ================= */
   createPosterCard(item, progress = 0) {
     const card = document.createElement("div");
     card.className = "poster-card";
+    card.setAttribute("data-card-id", item.id);
+
+    const healthBadge = item.isM3U && item.health && item.health !== "pending"
+      ? `<span class="health-badge ${item.health}">${item.health === "live" ? "LIVE" : item.health === "dead" ? "DEAD" : "..."}</span>`
+      : "";
 
     card.innerHTML = `
       <div class="poster-thumb-wrap">
         <img alt="Thumbnail" loading="lazy" />
-        ${item.isM3U ? `<span class="live-badge">LIVE</span>` : ""}
+        ${item.isM3U ? `<span class="live-badge">IPTV</span>` : ""}
+        ${healthBadge}
         ${progress > 0 ? `<div class="poster-progress" style="width: ${progress}%"></div>` : ""}
       </div>
       <h4 class="poster-title"></h4>
@@ -754,7 +992,12 @@ class CineStreamController {
     card.querySelector(".poster-title").textContent = item.title;
     card.querySelector(".poster-subtitle").textContent = `📁 ${item.folderName}`;
 
-    card.addEventListener("click", () => this.openDetailsScreen(item));
+    card.addEventListener("click", () => {
+      if (item.isM3U && typeof item.channelIndex === "number") {
+        this.currentPlayingChannelIndex = item.channelIndex;
+      }
+      this.openDetailsScreen(item);
+    });
     return card;
   }
 
@@ -789,19 +1032,24 @@ class CineStreamController {
     filtered.forEach((m) => this.dom.searchGrid.appendChild(this.createPosterCard(m)));
   }
 
-  /* ================= Streaming & Player Controller ================= */
+  /* ================= Streaming & Playback Controller ================= */
   openDetailsScreen(item, autoPlay = false) {
     this.activeMedia = item;
     const v = this.dom.mainVideo;
 
-    // Attach Audio Pipeline
-    this.setupAudioPipeline();
-    this.resumeAudioContext();
+    // Clean Volume Passthrough
+    v.muted = false;
+    v.volume = 1.0;
 
     this.dom.detailsTitle.textContent = item.title;
     this.dom.detailsBadge.textContent = item.isM3U ? "LIVE IPTV" : "STREAM";
-    this.dom.detailsMeta.textContent = `${item.folderName} • Adaptive Stream`;
+    this.dom.detailsMeta.textContent = `${item.folderName} • Clean Audio Stream`;
     
+    // Toggle In-Player Quick Switcher
+    if (this.dom.iptvPlayerControls) {
+      this.dom.iptvPlayerControls.style.display = item.isM3U ? "flex" : "none";
+    }
+
     this.dom.viewDetails.style.display = "block";
     this.dom.viewDetails.classList.add("active");
 
@@ -815,7 +1063,6 @@ class CineStreamController {
       </div>
     `;
 
-    this.detectAudioIncompatibility(item.fileName || item.title);
     this.playStream(item.streamUrl);
 
     const saved = this.history.find((h) => h.id === item.id);
@@ -870,6 +1117,9 @@ class CineStreamController {
       this.hlsInstance.destroy();
       this.hlsInstance = null;
     }
+    if (this.dom.channelDrawer) {
+      this.dom.channelDrawer.classList.remove("active");
+    }
     this.dom.mainVideo.pause();
     this.dom.mainVideo.src = "";
     
@@ -880,7 +1130,6 @@ class CineStreamController {
 
   togglePlayback() {
     const v = this.dom.mainVideo;
-    this.resumeAudioContext();
     if (v.paused) {
       v.play();
       this.dom.btnResumeVideo.textContent = "⏸ Pause";
