@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#07080e" />
-  <title>CineStream - Universal Player & Stream Hub</title>
+  <title>CineStream - Universal IPTV & Media Hub</title>
   <link rel="stylesheet" href="css/style.css" />
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
@@ -27,14 +27,14 @@
 
     <!-- Main Viewport -->
     <main class="content-viewport">
-      <!-- 1. HOME VIEW -->
+      <!-- 1. HOME SCREEN -->
       <section id="viewHome" class="screen-view active">
         <!-- Hero Showcase -->
         <div class="hero-showcase" id="heroShowcase">
           <img id="heroBackdrop" src="" alt="Hero Backdrop" />
           <div class="hero-scrim"></div>
           <div class="hero-details">
-            <span class="sub-badge" id="heroBadge">FEATURED MOVIE</span>
+            <span class="sub-badge" id="heroBadge">FEATURED STREAM</span>
             <h1 class="hero-title" id="heroTitle">Season Showcase</h1>
             <div class="hero-buttons">
               <button id="btnHeroWatch" class="btn btn-purple">▶ Watch Now</button>
@@ -70,7 +70,7 @@
           </div>
         </div>
 
-        <!-- Section 2: Live IPTV Channels -->
+        <!-- Section 2: Live IPTV Channels (With Built-in Stream Checker) -->
         <div class="media-section" id="sectionIptv" style="display: none;">
           <div class="section-header">
             <div class="header-group">
@@ -78,11 +78,31 @@
               <span id="m3uCountBadge" class="count-tag">0</span>
             </div>
             <div class="row-actions">
+              <button id="btnCheckStreams" class="btn-link text-primary" title="Check Online/Offline status">⚡ Check Health</button>
+              <button id="btnFilterLiveOnly" class="btn-link" title="Show only working channels">🟢 Live Only</button>
               <button id="btnExportM3U" class="btn-link">Save .m3u</button>
               <button id="btnClearM3U" class="btn-link text-danger">Clean IPTV</button>
             </div>
           </div>
-          <div class="pill-bar" id="m3uCategoryBar"></div>
+
+          <!-- Checker Progress Indicator -->
+          <div class="checker-progress-bar-wrap" id="checkerProgressWrap" style="display: none;">
+            <div class="checker-progress-fill" id="checkerProgressBar"></div>
+          </div>
+
+          <!-- Compact Group Selector Bar -->
+          <div class="iptv-filter-toolbar">
+            <div class="select-wrapper">
+              <select id="selectIptvGroup" class="iptv-group-dropdown">
+                <option value="all">🌐 All Categories / Countries</option>
+              </select>
+            </div>
+            <div class="iptv-search-wrapper">
+              <input type="text" id="inputIptvSearch" class="iptv-quick-search" placeholder="Search channels..." />
+            </div>
+          </div>
+
+          <!-- Channels Grid -->
           <div class="channels-vertical-grid" id="scrollerM3U"></div>
         </div>
 
@@ -112,35 +132,40 @@
         </div>
       </section>
 
-      <!-- 2. DETAILS & PLAYER MODAL -->
+      <!-- 2. DETAILS & PLAYER SCREEN -->
       <section id="viewDetails" class="details-screen" style="display: none;">
         <button id="btnBackDetails" class="back-floating-btn" aria-label="Back">❮</button>
         
         <div class="player-container" id="playerContainer">
           <video id="mainVideo" preload="metadata" playsinline controls></video>
+          
+          <!-- In-Player Quick Channel Navigation Controls -->
+          <div id="iptvPlayerControls" class="iptv-player-overlay-bar" style="display: none;">
+            <button id="btnPrevChannel" class="ctrl-btn" title="Previous Channel">⏮ Prev</button>
+            <button id="btnToggleChannelDrawer" class="ctrl-btn ctrl-highlight" title="Open Channel List">☰ Channels List</button>
+            <button id="btnNextChannel" class="ctrl-btn" title="Next Channel">Next ⏭</button>
+          </div>
+
+          <!-- Slide-Over Quick Channels Drawer -->
+          <div id="channelDrawer" class="channel-drawer">
+            <div class="drawer-header">
+              <span id="drawerGroupTitle">Channels</span>
+              <button id="btnCloseDrawer" class="btn-close-drawer">✕</button>
+            </div>
+            <div id="drawerChannelList" class="drawer-list"></div>
+          </div>
+
           <div class="seek-indicator seek-left" id="seekLeft">-10s</div>
           <div class="seek-indicator seek-right" id="seekRight">+10s</div>
-        </div>
-
-        <!-- Audio Codec Warning & Troubleshooting Banner -->
-        <div id="audioCodecAlert" class="audio-alert-banner" style="display: none;">
-          <div class="alert-content">
-            <span class="alert-icon">⚠️</span>
-            <div class="alert-text">
-              <strong>Dolby EAC3 / DTS Audio Detected:</strong>
-              <p>Browser များသည် EAC3/DTS Codec ကို တိုက်ရိုက် မဖွင့်နိုင်ပါ။ အသံမထွက်ပါက အောက်ပါ "Audio Boost / Downmix" ကို နှိပ်ပါ သို့မဟုတ် AAC format သို့ ပြောင်းလဲပေးပါ။</p>
-            </div>
-          </div>
-          <button id="btnFixAudioEngine" class="btn-alert-action">🔊 Force Boost Audio</button>
         </div>
 
         <div class="details-body">
           <div class="details-meta-row">
             <div>
-              <h1 id="detailsTitle" class="details-title">Select a Movie</h1>
+              <h1 id="detailsTitle" class="details-title">Select a Stream</h1>
               <div class="tags-line">
                 <span class="badge-age" id="detailsBadge">STREAM</span>
-                <span class="genre-text" id="detailsMeta">HD Stream</span>
+                <span class="genre-text" id="detailsMeta">Live Broadcast</span>
               </div>
             </div>
             <div class="rating-box">
@@ -155,7 +180,7 @@
           </div>
 
           <p class="details-synopsis" id="detailsSynopsis">
-            Streaming directly using advanced HTML5 Media Source Extensions with adaptive buffer playback.
+            Streaming directly using advanced HTML5 Media Source Extensions.
           </p>
 
           <div class="details-tab-nav">
@@ -189,7 +214,7 @@
       </button>
     </nav>
 
-    <!-- Upload/Add Media Modal -->
+    <!-- Upload/Add Media Modal Sheet -->
     <div id="mediaActionSheet" class="action-sheet-overlay">
       <div class="action-sheet">
         <h3 class="sheet-title">Add Content to App</h3>
@@ -216,56 +241,22 @@
       </div>
     </div>
 
-    <!-- Toast -->
+    <!-- Custom Glassmorphic Confirmation Modal -->
+    <div id="customConfirmModal" class="confirm-modal-overlay">
+      <div class="confirm-dialog-card">
+        <div class="dialog-icon-wrap" id="dialogIcon">🗑️</div>
+        <h3 class="dialog-title" id="dialogTitle">Clean Storage</h3>
+        <p class="dialog-desc" id="dialogMessage">သိမ်းဆည်းထားသော အချက်အလက်များကို အပြီးတိုင် ဖျက်မည်လား?</p>
+        <div class="dialog-button-group">
+          <button id="btnCancelDialog" class="btn btn-glass">Cancel</button>
+          <button id="btnConfirmDialog" class="btn btn-danger">Confirm Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
     <div id="appToast" class="toast"></div>
   </div>
-
-  <!-- Styling for Audio Alert Banner -->
-  <style>
-    .audio-alert-banner {
-      background: #1c152b;
-      border: 1px solid #7042f4;
-      border-radius: var(--radius-md, 14px);
-      padding: 12px 16px;
-      margin: 14px 16px 0 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .audio-alert-banner .alert-content {
-      display: flex;
-      gap: 12px;
-      align-items: flex-start;
-    }
-    .audio-alert-banner .alert-icon {
-      font-size: 1.4rem;
-    }
-    .audio-alert-banner .alert-text strong {
-      font-size: 0.85rem;
-      color: #fbbf24;
-      display: block;
-      margin-bottom: 2px;
-    }
-    .audio-alert-banner .alert-text p {
-      font-size: 0.75rem;
-      color: #9aa0b8;
-      line-height: 1.4;
-    }
-    .btn-alert-action {
-      background: #7042f4;
-      color: #fff;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 8px;
-      font-size: 0.78rem;
-      font-weight: 700;
-      cursor: pointer;
-      align-self: flex-start;
-    }
-    .btn-alert-action:hover {
-      background: #5d32d9;
-    }
-  </style>
 
   <script type="module" src="js/app.js"></script>
 </body>
