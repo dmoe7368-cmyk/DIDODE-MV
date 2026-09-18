@@ -1,5 +1,6 @@
 /**
- * Safe M3U Parser
+ * Production-Ready M3U Playlist Parser
+ * Upgraded: High-Precision Sports & Genre Recognition Regex Engine
  */
 export class M3UParser {
   static parse(rawContent) {
@@ -21,31 +22,41 @@ export class M3UParser {
           logo: "",
           group: "General",
           category: "General",
+          isSports: false,
           streamUrl: "",
           isM3U: true
         };
         
+        // 1. Logo Extraction
         const logoMatch = line.match(/tvg-logo=["']([^"']+)["']/i);
-        if (logoMatch && logoMatch[1]) {
-          currentChannel.logo = logoMatch[1].trim();
-        }
+        if (logoMatch && logoMatch[1]) currentChannel.logo = logoMatch[1].trim();
         
+        // 2. Group Title Extraction
         const groupMatch = line.match(/group-title=["']([^"']+)["']/i);
         if (groupMatch && groupMatch[1]) {
           currentChannel.group = this.sanitize(groupMatch[1]);
         }
         
+        // 3. Channel Name Extraction
         const commaIndex = line.lastIndexOf(",");
         if (commaIndex !== -1) {
           const rawTitle = line.substring(commaIndex + 1).trim();
           currentChannel.title = this.sanitize(rawTitle) || "Live Channel";
         }
         
-        currentChannel.category = this.detectCategory(currentChannel.title, currentChannel.group);
+        // 4. Detailed Categorization
+        const detected = this.detectCategory(currentChannel.title, currentChannel.group);
+        currentChannel.category = detected.category;
+        currentChannel.isSports = detected.isSports;
+        
+        // Group ထဲတွင် Sports ဟု မပါလျှင်ပင် Auto Classified Group အဖြစ် သတ်မှတ်ခြင်း
+        if (currentChannel.isSports && (!currentChannel.group || currentChannel.group.toLowerCase() === "general")) {
+          currentChannel.group = "Sports";
+        }
       } else if (!line.startsWith("#")) {
         if (line.startsWith("http://") || line.startsWith("https://")) {
+          // Exclude direct webpage video wrappers
           const isWebPlatform = /youtube\.com|youtu\.be|twitch\.tv|dailymotion\.com/i.test(line);
-          
           if (!isWebPlatform) {
             if (currentChannel) {
               currentChannel.streamUrl = line;
@@ -54,12 +65,14 @@ export class M3UParser {
             } else {
               const urlPath = line.split("?")[0];
               const fallbackTitle = urlPath.substring(urlPath.lastIndexOf("/") + 1) || "Direct Stream";
+              const detected = this.detectCategory(fallbackTitle, "Direct Links");
               channels.push({
                 id: "m3u-" + Date.now() + "-" + Math.random().toString(36).substring(2, 9),
                 title: this.sanitize(fallbackTitle),
                 logo: "",
-                group: "Direct Links",
-                category: "General",
+                group: detected.isSports ? "Sports" : "Direct Links",
+                category: detected.category,
+                isSports: detected.isSports,
                 streamUrl: line,
                 isM3U: true
               });
@@ -84,17 +97,31 @@ export class M3UParser {
       .trim();
   }
   
+  /**
+   * Universal Sports & Genre Recognition Matrix
+   */
   static detectCategory(title, group) {
     const combined = `${title} ${group}`.toLowerCase();
-    if (/sport|football|soccer|bein|espn|arena|sky sport|uefa|fifa|wwe|ufc|nba|racing|idman|cbc sport/i.test(combined)) {
-      return "Sports";
+    
+    // Comprehensive Sports Detection Regex
+    const sportsRegex = /\b(sport|sports|football|soccer|bein|espn|arena|sky sport|uefa|fifa|wwe|ufc|nba|racing|idman|cbc sport|cricket|tennis|golf|f1|formula|motorsport|motogp|hockey|baseball|rugby|atg live|super sport|polsat sport|bt sport|dazn|eurosport|match!|матч|kosmos|snooker|fight|boxing)\b/i;
+    
+    if (sportsRegex.test(combined)) {
+      return { category: "Sports", isSports: true };
     }
-    if (/movie|cinema|film|action|hbo|netflix|box office|thriller|comedy|drama|cine/i.test(combined)) {
-      return "Movies";
+    
+    if (/movie|cinema|film|action|hbo|netflix|box office|thriller|comedy|drama|cine|premiere/i.test(combined)) {
+      return { category: "Movies", isSports: false };
     }
-    if (/news|cnn|bbc|al jazeera|sky news|fox|weather|bloomberg|cnbc/i.test(combined)) {
-      return "News";
+    
+    if (/news|cnn|bbc|al jazeera|sky news|fox|weather|bloomberg|cnbc|haber|tagesschau|24h|euronews/i.test(combined)) {
+      return { category: "News", isSports: false };
     }
-    return group || "General";
+    
+    if (/anime|animation|cartoon|kids|disney|nick|plusplus|kika|cbbc|cbeebies/i.test(combined)) {
+      return { category: "Anime & Kids", isSports: false };
+    }
+    
+    return { category: group || "General", isSports: false };
   }
 }
